@@ -1,0 +1,49 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb
+    username: sa
+    password: 
+    driver-class-name: org.h2.Driver
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    database-platform: org.hibernate.dialect.H2Dialect
+    properties:
+      hibernate:
+        format_sql: true
+
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB
+      max-request-size: 12MB
+
+server:
+  port: 8080
+
+app:
+  jwt:
+    secret: 7c3e8f12a9d4b6e1c5f0a2d8e3b7c4f9a1d5e8b2c6f0a4d7e2b5c8f1a3d6e9b
+    expiration: 86400000
+
+  file:
+    upload-dir: ./uploads
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui/index.html
+    operationsSorter: method
+
+logging:
+  level:
+    com.projectevaluation: INFO
+    org.springframework.security: WARN
