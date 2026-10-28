@@ -6,7 +6,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "sections")
+@Table(name = "sections", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_section_cluster_name", columnNames = {"cluster_id", "name"})
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -16,8 +18,12 @@ public class Section {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private String name;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "cluster_id")
+    private Cluster cluster;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "mentor_id")

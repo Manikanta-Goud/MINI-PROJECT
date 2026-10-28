@@ -1,0 +1,23 @@
+spring:
+  config:
+    import: optional:file:../.env[.properties],optional:file:.env[.properties]
+  datasource:
+    url: ${SUPABASE_DB_URL:${DB_URL:jdbc:postgresql://localhost:5432/project_evaluation}}
+    username: ${SUPABASE_DB_USERNAME:${DB_USERNAME:project}}
+    password: ${SUPABASE_DB_PASSWORD:${DB_PASSWORD:project}}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+app:
+  file:
+    storage: s3
+    upload-dir: ${FILE_UPLOAD_DIR:/var/lib/project-evaluation/uploads}
+    s3:
+      endpoint: ${SUPABASE_S3_ENDPOINT}
+      region: ${SUPABASE_S3_REGION:ap-south-1}
+      access-key: ${SUPABASE_S3_ACCESS_KEY}
+      secret-key: ${SUPABASE_S3_SECRET_KEY}
+      bucket: ${SUPABASE_S3_BUCKET}

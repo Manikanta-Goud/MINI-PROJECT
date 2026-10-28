@@ -9,6 +9,7 @@ import java.util.List;
 public interface TeamRepository extends JpaRepository<Team, Long> {
     List<Team> findBySection(Section section);
     List<Team> findBySectionId(Long sectionId);
+    long countBySectionId(Long sectionId);
     @Query("SELECT t FROM Team t JOIN t.clusterHeads ch WHERE ch = :user")
     List<Team> findByClusterHead(@Param("user") User user);
     @Query("SELECT t FROM Team t JOIN t.members m WHERE m = :user")

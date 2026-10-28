@@ -44,6 +44,11 @@ public class PaperSubmission {
     @Builder.Default
     private SubmissionStatus status = SubmissionStatus.PENDING;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    @Builder.Default
+    private WorkflowState workflowState = WorkflowState.SUBMITTED;
+
     @CreationTimestamp
     private LocalDateTime submittedAt;
 
@@ -51,5 +56,9 @@ public class PaperSubmission {
 
     public enum SubmissionStatus {
         PENDING, UNDER_REVIEW, PASSED, FAILED
+    }
+
+    public enum WorkflowState {
+        DRAFT, SUBMITTED, MENTOR_REVIEW, REVISION, VERIFIED, GRADED, CLOSED
     }
 }

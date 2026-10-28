@@ -22,12 +22,24 @@ public class SectionController {
     private final PaperSubmissionRepository paperRepo;
     private final VersionSessionRepository versionRepo;
     private final FinalResultRepository finalResultRepo;
+    private final SubmissionEventRepository eventRepo;
 
     // -- Sections ----------------------------------------------------------
 
     @GetMapping
-    public ResponseEntity<?> getAllSections() {
-        List<Map<String, Object>> list = sectionRepo.findAll().stream().map(this::sectionMap).collect(Collectors.toList());
+    public ResponseEntity<?> getAllSections(
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        User user = currentUser(userDetails);
+        List<Section> sections = sectionRepo.findAll().stream()
+                .filter(section -> hasRole(user, "ADMIN")
+                        || (hasRole(user, "MENTOR") && section.getMentor() != null
+                            && section.getMentor().getId().equals(user.getId()))
+                        || teamRepo.findByMember(user).stream()
+                            .anyMatch(team -> team.getSection().getId().equals(section.getId()))
+                        || teamRepo.findByClusterHead(user).stream()
+                            .anyMatch(team -> team.getSection().getId().equals(section.getId())))
+                .toList();
+        List<Map<String, Object>> list = sections.stream().map(this::sectionMap).collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(list));
     }
 
@@ -64,9 +76,23 @@ public class SectionController {
     // -- Teams -------------------------------------------------------------
 
     @GetMapping("/{id}/teams")
-    public ResponseEntity<?> getTeams(@PathVariable Long id) {
-        List<Map<String, Object>> teams = teamRepo.findBySectionId(id).stream().map(this::teamMap).collect(Collectors.toList());
+    public ResponseEntity<?> getTeams(@PathVariable Long id,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        User user = currentUser(userDetails);
+        List<Team> scopedTeams = teamRepo.findBySectionId(id).stream()
+                .filter(team -> canAccessTeam(team, user)).toList();
+        List<Map<String, Object>> teams = scopedTeams.stream().map(this::teamMap).collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(teams));
+    }
+
+    @GetMapping("/teams/student-team")
+    @PreAuthorize("hasRole('STUDENT')")
+    public ResponseEntity<?> getStudentTeam(
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        User student = currentUser(userDetails);
+        return teamRepo.findByMember(student).stream().findFirst()
+                .map(team -> ResponseEntity.ok(ApiResponse.success(teamMap(team))))
+                .orElseGet(() -> ResponseEntity.ok(ApiResponse.success(null)));
     }
 
     @PostMapping("/{id}/teams")
@@ -105,15 +131,75 @@ public class SectionController {
     // -- Paper Submissions -------------------------------------------------
 
     @GetMapping("/{id}/papers")
-    public ResponseEntity<?> getPapers(@PathVariable Long id) {
-        List<Map<String, Object>> papers = paperRepo.findBySectionId(id).stream().map(this::paperMap).collect(Collectors.toList());
+    public ResponseEntity<?> getPapers(@PathVariable Long id,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        User user = currentUser(userDetails);
+        List<Map<String, Object>> papers = paperRepo.findBySectionId(id).stream()
+                .filter(paper -> canAccessTeam(paper.getTeam(), user))
+                .map(this::paperMap).collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(papers));
+    }
+
+    @GetMapping("/papers/{paperId}/events")
+    public ResponseEntity<?> getPaperEvents(@PathVariable Long paperId,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        PaperSubmission paper = paperRepo.findById(paperId).orElseThrow();
+        requireTeamAccess(paper.getTeam(), currentUser(userDetails));
+        List<Map<String, Object>> events = eventRepo.findByPaperIdOrderByCreatedAtAsc(paperId).stream().map(event -> {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("id", event.getId());
+            result.put("fromState", event.getFromState());
+            result.put("toState", event.getToState());
+            result.put("action", event.getAction());
+            result.put("comment", event.getComment());
+            result.put("actor", event.getActor().getFullName());
+            result.put("createdAt", event.getCreatedAt());
+            return result;
+        }).toList();
+        return ResponseEntity.ok(ApiResponse.success(events));
+    }
+
+    @PostMapping("/papers/{paperId}/transition")
+    public ResponseEntity<?> transitionPaper(@PathVariable Long paperId,
+            @RequestBody Map<String, Object> body,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        User actor = currentUser(userDetails);
+        PaperSubmission paper = paperRepo.findById(paperId).orElseThrow();
+        requireTeamAccess(paper.getTeam(), actor);
+        String targetName = Objects.toString(body.get("state"), "");
+        PaperSubmission.WorkflowState target;
+        try {
+            target = PaperSubmission.WorkflowState.valueOf(targetName);
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Unknown workflow state", "INVALID_STATE"));
+        }
+        PaperSubmission.WorkflowState current = paper.getWorkflowState();
+        if (!isAllowedTransition(current, target, actor)) {
+            return ResponseEntity.status(409).body(ApiResponse.error(
+                    "Transition is not permitted for this role or current state", "INVALID_TRANSITION"));
+        }
+        paper.setWorkflowState(target);
+        if (target == PaperSubmission.WorkflowState.MENTOR_REVIEW) {
+            paper.setStatus(PaperSubmission.SubmissionStatus.UNDER_REVIEW);
+        }
+        if (target == PaperSubmission.WorkflowState.REVISION) {
+            paper.setStatus(PaperSubmission.SubmissionStatus.FAILED);
+        }
+        paperRepo.save(paper);
+        eventRepo.save(SubmissionEvent.builder()
+                .paper(paper).actor(actor).fromState(current).toState(target)
+                .action("WORKFLOW_TRANSITION").comment(Objects.toString(body.get("comment"), null)).build());
+        return ResponseEntity.ok(ApiResponse.success(paperMap(paper)));
     }
 
     // -- Versions ----------------------------------------------------------
 
     @GetMapping("/{id}/versions")
-    public ResponseEntity<?> getVersions(@PathVariable Long id) {
+    public ResponseEntity<?> getVersions(@PathVariable Long id,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        // Version metadata is cluster-scoped just like the papers it contains.
+        // The caller is checked before loading the version collection.
+        requireSectionAccess(sectionRepo.findById(id).orElseThrow(), currentUser(userDetails));
         List<Map<String, Object>> versions = versionRepo.findBySectionIdOrderByVersionNumberAsc(id).stream().map(vs -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", vs.getId());
@@ -133,11 +219,12 @@ public class SectionController {
             @RequestBody(required = false) Map<String, Object> body,
             @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         Section section = sectionRepo.findById(id).orElseThrow();
+        User creator = currentUser(userDetails);
+        requireSectionAccess(section, creator);
         Optional<VersionSession> existing = versionRepo.findBySectionIdAndStatus(id, VersionSession.SessionStatus.OPEN);
         if (existing.isPresent()) return ResponseEntity.badRequest().body(ApiResponse.error("Version already open for this section", "ERROR"));
         Optional<VersionSession> last = versionRepo.findTopBySectionIdOrderByVersionNumberDesc(id);
         int nextVersion = last.map(vs -> vs.getVersionNumber() + 1).orElse(1);
-        User creator = userRepo.findByEmail(userDetails.getUsername()).orElseThrow();
         // Add all PENDING or FAILED papers for this section to this version
         List<PaperSubmission> pendingPapers = paperRepo.findBySectionId(id).stream()
                 .filter(p -> p.getStatus() == PaperSubmission.SubmissionStatus.PENDING || p.getStatus() == PaperSubmission.SubmissionStatus.FAILED)
@@ -153,8 +240,11 @@ public class SectionController {
 
     @PostMapping("/versions/{vsId}/evaluate")
     @PreAuthorize("hasRole('ADMIN') or hasRole('MENTOR') or hasRole('CLUSTER_HEAD')")
-    public ResponseEntity<?> evaluatePapers(@PathVariable Long vsId, @RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> evaluatePapers(@PathVariable Long vsId, @RequestBody Map<String, Object> body,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         VersionSession vs = versionRepo.findById(vsId).orElseThrow();
+        User evaluator = currentUser(userDetails);
+        requireSectionAccess(vs.getSection(), evaluator);
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> evaluations = (List<Map<String, Object>>) body.get("evaluations");
         List<FinalResult> newResults = new ArrayList<>();
@@ -163,12 +253,14 @@ public class SectionController {
             double aiPct = Double.parseDouble(eval.get("aiContentPercent").toString());
             double plagPct = Double.parseDouble(eval.get("plagiarismPercent").toString());
             PaperSubmission paper = paperRepo.findById(paperId).orElseThrow();
+            requireTeamAccess(paper.getTeam(), evaluator);
             paper.setAiContentPercent(aiPct);
             paper.setPlagiarismPercent(plagPct);
             paper.setEvaluatedAt(java.time.LocalDateTime.now());
             paper.setVersionNumber(vs.getVersionNumber());
             if (aiPct == 0.0 && plagPct <= 10.0) {
                 paper.setStatus(PaperSubmission.SubmissionStatus.PASSED);
+                paper.setWorkflowState(PaperSubmission.WorkflowState.GRADED);
                 if (!finalResultRepo.existsByTeamId(paper.getTeam().getId())) {
                     FinalResult fr = FinalResult.builder()
                             .team(paper.getTeam())
@@ -182,6 +274,7 @@ public class SectionController {
                 }
             } else {
                 paper.setStatus(PaperSubmission.SubmissionStatus.FAILED);
+                paper.setWorkflowState(PaperSubmission.WorkflowState.REVISION);
             }
             paperRepo.save(paper);
         }
@@ -195,8 +288,11 @@ public class SectionController {
     // -- Final Results -----------------------------------------------------
 
     @GetMapping("/final-results")
-    public ResponseEntity<?> getAllFinalResults() {
-        List<Map<String, Object>> results = finalResultRepo.findAll().stream().map(fr -> {
+    public ResponseEntity<?> getAllFinalResults(
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        User user = currentUser(userDetails);
+        List<Map<String, Object>> results = finalResultRepo.findAll().stream()
+                .filter(fr -> canAccessTeam(fr.getTeam(), user)).map(fr -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", fr.getId());
             m.put("teamName", fr.getTeam().getName());
@@ -212,8 +308,11 @@ public class SectionController {
     }
 
     @GetMapping("/final-results/section/{sectionId}")
-    public ResponseEntity<?> getFinalResultsBySection(@PathVariable Long sectionId) {
-        List<Map<String, Object>> results = finalResultRepo.findBySectionId(sectionId).stream().map(fr -> {
+    public ResponseEntity<?> getFinalResultsBySection(@PathVariable Long sectionId,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        User user = currentUser(userDetails);
+        List<Map<String, Object>> results = finalResultRepo.findBySectionId(sectionId).stream()
+                .filter(fr -> canAccessTeam(fr.getTeam(), user)).map(fr -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", fr.getId());
             m.put("teamName", fr.getTeam().getName());
@@ -238,6 +337,15 @@ public class SectionController {
         try {
             User student = userRepo.findByEmail(userDetails.getUsername()).orElseThrow();
             Team team = teamRepo.findById(teamId).orElseThrow();
+            if (!hasRole(student, "STUDENT") || !team.getMembers().contains(student)) {
+                return ResponseEntity.status(403).body(ApiResponse.error("You can only submit for your own team", "FORBIDDEN"));
+            }
+            if (file.isEmpty() || file.getSize() > 12 * 1024 * 1024
+                    || (!"application/pdf".equalsIgnoreCase(file.getContentType())
+                        && !"application/msword".equalsIgnoreCase(file.getContentType())
+                        && !"application/vnd.openxmlformats-officedocument.wordprocessingml.document".equalsIgnoreCase(file.getContentType()))) {
+                return ResponseEntity.badRequest().body(ApiResponse.error("Only non-empty PDF or Word files up to 12 MB are accepted", "INVALID_FILE"));
+            }
             java.nio.file.Path uploadDir = java.nio.file.Paths.get("uploads/papers");
             java.nio.file.Files.createDirectories(uploadDir);
             String fileName = java.util.UUID.randomUUID() + "_" + file.getOriginalFilename();
@@ -248,9 +356,17 @@ public class SectionController {
                     .team(team)
                     .fileName(file.getOriginalFilename())
                     .filePath(filePath.toString())
+                    .versionNumber(paperRepo.findByTeam(team).stream()
+                            .map(PaperSubmission::getVersionNumber).filter(Objects::nonNull)
+                            .max(Integer::compareTo).orElse(0) + 1)
                     .status(PaperSubmission.SubmissionStatus.PENDING)
+                    .workflowState(PaperSubmission.WorkflowState.SUBMITTED)
                     .build();
             paperRepo.save(paper);
+            eventRepo.save(SubmissionEvent.builder()
+                    .paper(paper).actor(student).fromState(PaperSubmission.WorkflowState.DRAFT)
+                    .toState(PaperSubmission.WorkflowState.SUBMITTED)
+                    .action("PAPER_SUBMITTED").build());
             return ResponseEntity.ok(ApiResponse.success(paperMap(paper)));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Upload failed: " + e.getMessage(), "UPLOAD_ERROR"));
@@ -313,6 +429,7 @@ public class SectionController {
         m.put("id", p.getId());
         m.put("fileName", p.getFileName());
         m.put("status", p.getStatus());
+        m.put("workflowState", p.getWorkflowState());
         m.put("versionNumber", p.getVersionNumber());
         m.put("aiContentPercent", p.getAiContentPercent());
         m.put("plagiarismPercent", p.getPlagiarismPercent());
@@ -328,8 +445,62 @@ public class SectionController {
         }
         return m;
     }
+
+    private User currentUser(org.springframework.security.core.userdetails.UserDetails details) {
+        return userRepo.findByEmail(details.getUsername()).orElseThrow();
+    }
+
+    private boolean hasRole(User user, String role) {
+        return user.getRole() != null && user.getRole().getName().name().equals(role);
+    }
+
+    private boolean canAccessTeam(Team team, User user) {
+        if (team == null || user == null) return false;
+        return hasRole(user, "ADMIN")
+                || (hasRole(user, "STUDENT") && team.getMembers().contains(user))
+                || (hasRole(user, "MENTOR") && team.getSection().getMentor() != null
+                    && team.getSection().getMentor().getId().equals(user.getId()))
+                || (hasRole(user, "CLUSTER_HEAD") && team.getClusterHeads().contains(user));
+    }
+
+    private void requireTeamAccess(Team team, User user) {
+        if (!canAccessTeam(team, user)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Cluster or role scope denied");
+        }
+    }
+
+    private void requireSectionAccess(Section section, User user) {
+        boolean allowed = hasRole(user, "ADMIN")
+                || (hasRole(user, "MENTOR") && section.getMentor() != null
+                    && section.getMentor().getId().equals(user.getId()))
+                || teamRepo.findByMember(user).stream()
+                    .anyMatch(team -> team.getSection().getId().equals(section.getId()))
+                || teamRepo.findByClusterHead(user).stream()
+                    .anyMatch(team -> team.getSection().getId().equals(section.getId()));
+        if (!allowed) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Cluster or role scope denied");
+        }
+    }
+
+    private boolean isAllowedTransition(PaperSubmission.WorkflowState current,
+                                        PaperSubmission.WorkflowState target,
+                                        User actor) {
+        String role = actor.getRole().getName().name();
+        if (hasRole(actor, "ADMIN")) return true;
+        return switch (current) {
+            case DRAFT -> target == PaperSubmission.WorkflowState.SUBMITTED && "STUDENT".equals(role);
+            case SUBMITTED -> target == PaperSubmission.WorkflowState.MENTOR_REVIEW && "MENTOR".equals(role);
+            case MENTOR_REVIEW -> ("MENTOR".equals(role)
+                    && (target == PaperSubmission.WorkflowState.REVISION
+                        || target == PaperSubmission.WorkflowState.VERIFIED));
+            case REVISION -> target == PaperSubmission.WorkflowState.SUBMITTED && "STUDENT".equals(role);
+            case VERIFIED -> target == PaperSubmission.WorkflowState.GRADED
+                    && "CLUSTER_HEAD".equals(role);
+            case GRADED -> target == PaperSubmission.WorkflowState.CLOSED
+                    && "CLUSTER_HEAD".equals(role);
+            case CLOSED -> false;
+        };
+    }
 }
-
-
-
-

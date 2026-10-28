@@ -34,8 +34,7 @@ export function Sidebar() {
   const navLinks = {
     ADMIN: [
       { label: "Overview", href: "/admin", icon: LayoutDashboard, exact: true },
-      { label: "Sections", href: "/admin/sections", icon: Layers },
-      { label: "Mentors", href: "/admin/mentors", icon: Star },
+      { label: "Clusters & Accounts", href: "/admin/clusters", icon: Users },
       { label: "Versions", href: "/admin/versions", icon: CheckCircle },
       { label: "Final Results", href: "/admin/results", icon: Trophy },
     ],

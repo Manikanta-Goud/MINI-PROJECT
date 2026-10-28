@@ -4,10 +4,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import api from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import {
-  Users, Layers, BookOpen, UserCheck, Shield, ChevronDown, ChevronRight, CheckCircle, XCircle, Trophy, Star
+  Users, Layers, BookOpen, UserCheck, Shield, ChevronDown, ChevronRight, CheckCircle, XCircle, Trophy, Star, Pencil, Trash2
 } from "lucide-react";
 
-type Tab = "overview" | "sections" | "mentors" | "versions" | "results";
+type Tab = "overview" | "sections" | "clusters" | "mentors" | "versions" | "results";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -18,19 +18,40 @@ export default function AdminDashboard() {
   const [sections, setSections] = useState<any[]>([]);
   const [mentors, setMentors] = useState<any[]>([]);
   const [finalResults, setFinalResults] = useState<any[]>([]);
+  const [clusters, setClusters] = useState<any[]>([]);
+  const [loadError, setLoadError] = useState("");
+
+  const fetchClusters = useCallback(async () => {
+    const response = await api.get("/admin/clusters");
+    setClusters(response.data.data || []);
+    setLoadError("");
+  }, []);
 
   const fetchAll = useCallback(async () => {
-    const [dash, sec, userRes, res] = await Promise.allSettled([
+    if (tab === "clusters") {
+      try { await fetchClusters(); } catch (error: any) {
+        setLoadError(error.response?.data?.message || "Could not load clusters.");
+      }
+      return;
+    }
+    const [dash, sec, userRes, res, clusterRes] = await Promise.allSettled([
       api.get("/admin/dashboard"),
       api.get("/sections"),
       api.get("/admin/users?role=MENTOR"),
-      api.get("/sections/final-results")
+      api.get("/sections/final-results"),
+      tab === "overview" ? api.get("/admin/clusters") : Promise.resolve({ data: { data: [] } })
     ]);
     if (dash.status === "fulfilled") setStats(dash.value.data.data);
     if (sec.status === "fulfilled") setSections(sec.value.data.data || []);
     if (userRes.status === "fulfilled") setMentors(userRes.value.data.data || []);
     if (res.status === "fulfilled") setFinalResults(res.value.data.data || []);
-  }, []);
+    if (clusterRes.status === "fulfilled") {
+      setClusters(clusterRes.value.data.data || []);
+      setLoadError("");
+    } else {
+      setLoadError(clusterRes.reason?.response?.data?.message || "Could not load clusters. Please sign in again.");
+    }
+  }, [fetchClusters, tab]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -49,6 +70,11 @@ export default function AdminDashboard() {
       </div>
 
       <div className="p-8 space-y-6">
+        {loadError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {loadError}
+          </div>
+        )}
         {tab === "overview" && stats && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -69,11 +95,25 @@ export default function AdminDashboard() {
             </div>
 
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-              <h2 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <Layers className="w-5 h-5 text-purple-500" />Recent Sections Overview
-              </h2>
-              <div className="space-y-3">
-                {sections.slice(0, 5).map(s => <SectionCard key={s.id} section={s} />)}
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-bold text-gray-800 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-purple-500" />Cluster Setup
+                </h2>
+                <a href="/admin/clusters" className="text-sm font-semibold text-indigo-600 hover:text-indigo-800">Manage clusters</a>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {clusters.slice(0, 6).map(cluster => (
+                  <div key={cluster.id} className="rounded-xl border border-gray-100 p-4">
+                    <div className="flex items-center justify-between">
+                      <p className="font-bold text-gray-900">{cluster.name}</p>
+                      <span className="text-xs text-gray-500">{cluster.sections.length} sections</span>
+                    </div>
+                    <p className="text-sm text-gray-500 mt-1">
+                      {cluster.clusterHead ? `${cluster.clusterHead.firstName} ${cluster.clusterHead.lastName}` : "Cluster Head not assigned"}
+                    </p>
+                  </div>
+                ))}
+                {clusters.length === 0 && <p className="text-sm text-gray-500">No clusters configured yet.</p>}
               </div>
             </div>
           </motion.div>
@@ -85,6 +125,8 @@ export default function AdminDashboard() {
             {sections.map(s => <SectionCard key={s.id} section={s} expanded />)}
           </motion.div>
         )}
+
+        {tab === "clusters" && <ClusterManagement clusters={clusters} onChanged={fetchClusters} />}
 
         {tab === "mentors" && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
@@ -158,6 +200,271 @@ export default function AdminDashboard() {
         )}
       </div>
     </div>
+  );
+}
+
+function ClusterManagement({ clusters, onChanged }: { clusters: any[]; onChanged: () => void }) {
+  const [clusterName, setClusterName] = useState("");
+  const [selected, setSelected] = useState<number | null>(null);
+  const [account, setAccount] = useState({ firstName: "", lastName: "", email: "", password: "" });
+  const [sectionName, setSectionName] = useState("");
+  const [accountType, setAccountType] = useState<"cluster-head" | "guides">("cluster-head");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const activeCluster = clusters.find(cluster => cluster.id === selected) || null;
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const [createDialog, setCreateDialog] = useState<"cluster" | "section" | "account" | null>(null);
+
+  const runAction = async (action: () => Promise<void>, message: string) => {
+    setError("");
+    setSuccess("");
+    try {
+      await action();
+      setSuccess(message);
+      await onChanged();
+    } catch (requestError: any) {
+      setError(requestError.response?.data?.message || "The operation failed. Please try again.");
+    }
+  };
+
+  const submitCluster = async (event: React.FormEvent) => {
+    event.preventDefault();
+    await runAction(async () => {
+      await api.post("/admin/clusters", { name: clusterName });
+      setClusterName("");
+    }, "Cluster created successfully.");
+  };
+
+  const submitSection = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (selected === null) return;
+    await runAction(async () => {
+      await api.post(`/admin/clusters/${selected}/sections`, { name: sectionName });
+      setSectionName("");
+    }, "Section added successfully.");
+  };
+
+  const submitAccount = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (selected === null) return;
+    await runAction(async () => {
+      await api.post(`/admin/clusters/${selected}/${accountType}`, account);
+      setAccount({ firstName: "", lastName: "", email: "", password: "" });
+    }, `${accountType === "guides" ? "Guide" : "Cluster Head"} account created successfully.`);
+  };
+
+  const editCluster = async (cluster: any) => {
+    const name = window.prompt("Cluster name", cluster.name)?.trim();
+    if (!name || name === cluster.name) return;
+    await runAction(() => api.put(`/admin/clusters/${cluster.id}`, { name }).then(() => undefined), "Cluster updated successfully.");
+  };
+
+  const removeCluster = async (cluster: any) => {
+    if (!window.confirm(`Delete ${cluster.name}? It must have no sections.`)) return;
+    await runAction(() => api.delete(`/admin/clusters/${cluster.id}`).then(() => undefined), "Cluster deleted successfully.");
+    if (selected === cluster.id) setSelected(null);
+  };
+
+  const editSection = async (cluster: any, section: any) => {
+    const name = window.prompt("Section name", section.name)?.trim();
+    if (!name || name === section.name) return;
+    await runAction(() => api.put(`/admin/clusters/${cluster.id}/sections/${section.id}`, { name }).then(() => undefined), "Section updated successfully.");
+  };
+
+  const removeSection = async (cluster: any, section: any) => {
+    if (!window.confirm(`Delete ${section.name}?`)) return;
+    await runAction(() => api.delete(`/admin/clusters/${cluster.id}/sections/${section.id}`).then(() => undefined), "Section deleted successfully.");
+  };
+
+  const editAccount = async (accountToEdit: any) => {
+    const firstName = window.prompt("First name", accountToEdit.firstName)?.trim();
+    const lastName = window.prompt("Last name", accountToEdit.lastName)?.trim();
+    const email = window.prompt("Email", accountToEdit.email)?.trim();
+    if (!firstName || !lastName || !email) return;
+    await runAction(() => api.put(`/admin/users/${accountToEdit.id}`, { firstName, lastName, email }).then(() => undefined), "Account updated successfully.");
+  };
+
+  const removeAccount = async (accountToRemove: any) => {
+    if (!window.confirm(`Deactivate ${accountToRemove.firstName} ${accountToRemove.lastName}?`)) return;
+    await runAction(() => api.delete(`/admin/users/${accountToRemove.id}`).then(() => undefined), "Account deactivated successfully.");
+  };
+
+  const openCreate = (type: "cluster" | "section" | "account") => {
+    setNewMenuOpen(false);
+    setCreateDialog(type);
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mx-auto max-w-7xl space-y-5">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Administration</p>
+          <h2 className="mt-1 text-2xl font-semibold tracking-tight text-gray-900">Clusters & accounts</h2>
+          <p className="mt-1 text-sm text-gray-500">Organize your academic workspace.</p>
+        </div>
+        <div className="hidden rounded-xl border border-gray-200 bg-white px-3 py-2 text-right sm:block">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Total clusters</p>
+          <p className="text-lg font-semibold text-gray-900">{clusters.length}</p>
+        </div>
+      </div>
+      {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+      {success && <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{success}</div>}
+      <div className="relative z-20 flex min-h-14 items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-2.5 shadow-sm">
+        <div className="flex min-w-0 items-center gap-2 text-sm">
+          <button type="button" onClick={() => setSelected(null)} className="font-semibold text-indigo-600 hover:text-indigo-800">ProjectFlow</button>
+          <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
+          {activeCluster ? (
+            <>
+              <button type="button" onClick={() => setSelected(null)} className="font-semibold text-indigo-600 hover:text-indigo-800">Clusters</button>
+              <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
+              <span className="truncate font-bold text-gray-900">{activeCluster.name}</span>
+            </>
+          ) : <span className="font-bold text-gray-900">Clusters</span>}
+        </div>
+        <div className="relative">
+          <button type="button" onClick={() => setNewMenuOpen(!newMenuOpen)}
+            className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 hover:shadow-md">
+            <span className="text-lg leading-none">+</span> New
+          </button>
+          {newMenuOpen && (
+            <div className="absolute right-0 top-12 w-56 overflow-hidden rounded-2xl border border-gray-200 bg-white p-1.5 shadow-xl">
+              {!activeCluster && <button type="button" onClick={() => openCreate("cluster")} className="block w-full rounded-xl px-4 py-2.5 text-left text-sm hover:bg-indigo-50">New cluster</button>}
+              {activeCluster && <>
+                <button type="button" onClick={() => openCreate("section")} className="block w-full rounded-xl px-4 py-2.5 text-left text-sm hover:bg-indigo-50">New section</button>
+                <button type="button" onClick={() => { setAccountType("guides"); openCreate("account"); }} className="block w-full rounded-xl px-4 py-2.5 text-left text-sm hover:bg-indigo-50">New mentor / guide</button>
+                {!activeCluster.clusterHead && <button type="button" onClick={() => { setAccountType("cluster-head"); openCreate("account"); }} className="block w-full rounded-xl px-4 py-2.5 text-left text-sm hover:bg-indigo-50">New Cluster Head</button>}
+              </>}
+            </div>
+          )}
+        </div>
+      </div>
+      {!activeCluster ? (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="mb-5 flex items-center justify-between border-b border-gray-100 pb-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Project workspace</p>
+              <h3 className="mt-1 text-lg font-semibold text-gray-900">All clusters</h3>
+            </div>
+            <span className="rounded-full bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700">{clusters.length} items</span>
+          </div>
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+            {clusters.map(cluster => (
+              <div key={cluster.id} onClick={() => setSelected(cluster.id)}
+                className="group cursor-pointer rounded-xl border border-gray-200 bg-white p-5 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40">
+                <div className="flex items-start justify-between">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 transition group-hover:bg-indigo-600 group-hover:text-white">
+                    <Layers className="h-6 w-6" />
+                  </div>
+                  <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button type="button" onClick={e => { e.stopPropagation(); editCluster(cluster); }} className="rounded-lg bg-white p-2 text-gray-400 hover:text-indigo-600"><Pencil className="h-4 w-4" /></button>
+                    <button type="button" onClick={e => { e.stopPropagation(); removeCluster(cluster); }} className="rounded-lg bg-white p-2 text-gray-400 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                  </div>
+                </div>
+                <div className="mt-5 flex items-center justify-between gap-2">
+                  <h4 className="truncate text-base font-semibold text-gray-900">{cluster.name}</h4>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-gray-400 transition group-hover:translate-x-1 group-hover:text-indigo-600" />
+                </div>
+                <p className="mt-1 text-sm text-gray-500">Open cluster workspace</p>
+                <div className="mt-5 flex gap-2 text-xs font-semibold text-gray-600">
+                  <span className="rounded-md bg-gray-100 px-2.5 py-1.5">{cluster.sections.length} sections</span>
+                  <span className="rounded-md bg-gray-100 px-2.5 py-1.5">{cluster.guides.length} mentors</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          {clusters.length === 0 && <div className="rounded-xl border border-dashed border-gray-300 p-12 text-center text-sm text-gray-500">No clusters yet. Create the first cluster above.</div>}
+        </div>
+      ) : (
+        <motion.div initial={{ opacity: 0, x: 15 }} animate={{ opacity: 1, x: 0 }} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+            <div className="flex items-center gap-2 text-sm">
+              <button type="button" onClick={() => setSelected(null)} className="font-semibold text-indigo-600 hover:text-indigo-800">All clusters</button>
+              <ChevronRight className="h-4 w-4 text-gray-400" />
+              <span className="font-bold text-gray-900">{activeCluster.name}</span>
+            </div>
+            <button type="button" onClick={() => setSelected(null)} className="rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">Back</button>
+          </div>
+          <div className="bg-gray-900 px-6 py-6 text-white">
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10"><Layers className="h-6 w-6" /></div>
+              <div>
+                <p className="text-sm text-indigo-100">Cluster workspace</p>
+                <h3 className="text-xl font-semibold">{activeCluster.name}</h3>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-6 p-6 lg:grid-cols-2">
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-5 lg:col-span-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wide text-indigo-500">Cluster Head</p>
+              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-indigo-600">1 maximum</span>
+            </div>
+              {activeCluster.clusterHead ? (
+                <div className="mt-3 flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-bold text-indigo-700">
+                    {activeCluster.clusterHead.firstName[0]}{activeCluster.clusterHead.lastName[0]}
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-semibold text-gray-900">{activeCluster.clusterHead.firstName} {activeCluster.clusterHead.lastName}</p>
+                    <p className="text-xs text-gray-500">{activeCluster.clusterHead.email}</p>
+                  </div>
+                  <button type="button" onClick={() => editAccount(activeCluster.clusterHead)}><Pencil className="h-4 w-4 text-gray-400 hover:text-indigo-600" /></button>
+                  <button type="button" onClick={() => removeAccount(activeCluster.clusterHead)}><Trash2 className="h-4 w-4 text-gray-400 hover:text-red-600" /></button>
+                </div>
+              ) : <p className="mt-2 text-sm text-gray-500">No Cluster Head assigned. Use <span className="font-semibold text-indigo-600">+ New → New Cluster Head</span> to add one.</p>}
+            </div>
+            <div>
+              <div className="mb-3 flex items-center justify-between"><h4 className="font-bold text-gray-900">Sections</h4><span className="text-sm text-gray-500">{activeCluster.sections.length}</span></div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {activeCluster.sections.map((section: any) => (
+                  <div key={section.id} className="group rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <div className="flex items-center justify-between"><BookOpen className="h-5 w-5 text-purple-600" /><span className="flex gap-1 opacity-0 group-hover:opacity-100"><button type="button" onClick={() => editSection(activeCluster, section)}><Pencil className="h-3 w-3 text-gray-500" /></button><button type="button" onClick={() => removeSection(activeCluster, section)}><Trash2 className="h-3 w-3 text-red-500" /></button></span></div>
+                    <p className="mt-3 font-bold text-gray-800">{section.name}</p>
+                  </div>
+                ))}
+                {activeCluster.sections.length === 0 && <p className="col-span-full rounded-xl border border-dashed p-6 text-center text-sm text-gray-400">No sections yet.</p>}
+              </div>
+            </div>
+            <div>
+              <div className="mb-3 flex items-center justify-between"><h4 className="font-bold text-gray-900">Mentors / Guides</h4><span className="text-sm text-gray-500">{activeCluster.guides.length}</span></div>
+              <div className="space-y-2">
+                {activeCluster.guides.map((guide: any) => <div key={guide.id} className="flex items-center justify-between rounded-xl border border-gray-200 p-3"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-teal-100 text-sm font-bold text-teal-700">{guide.firstName[0]}{guide.lastName[0]}</div><div><p className="text-sm font-semibold">{guide.firstName} {guide.lastName}</p><p className="text-xs text-gray-500">{guide.email}</p></div></div><span className="flex gap-2"><button type="button" onClick={() => editAccount(guide)}><Pencil className="h-4 w-4 text-gray-400 hover:text-indigo-600" /></button><button type="button" onClick={() => removeAccount(guide)}><Trash2 className="h-4 w-4 text-gray-400 hover:text-red-600" /></button></span></div>)}
+                {activeCluster.guides.length === 0 && <p className="rounded-xl border border-dashed p-6 text-center text-sm text-gray-400">No mentors yet.</p>}
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+      {createDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4" onClick={() => setCreateDialog(null)}>
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
+            {createDialog === "cluster" && (
+              <form onSubmit={async event => { await submitCluster(event); setCreateDialog(null); }} className="space-y-4">
+                <h3 className="text-lg font-bold text-gray-900">New cluster</h3>
+                <input autoFocus required value={clusterName} onChange={e => setClusterName(e.target.value)} placeholder="Cluster name" className="w-full rounded-xl border px-3 py-2.5" />
+                <div className="flex justify-end gap-2"><button type="button" onClick={() => setCreateDialog(null)} className="rounded-xl px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button><button className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white">Create</button></div>
+              </form>
+            )}
+            {createDialog === "section" && (
+              <form onSubmit={async event => { await submitSection(event); setCreateDialog(null); }} className="space-y-4">
+                <h3 className="text-lg font-bold text-gray-900">New section in {activeCluster?.name}</h3>
+                <input autoFocus required value={sectionName} onChange={e => setSectionName(e.target.value)} placeholder="Section A" className="w-full rounded-xl border px-3 py-2.5" />
+                <div className="flex justify-end gap-2"><button type="button" onClick={() => setCreateDialog(null)} className="rounded-xl px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button><button className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-semibold text-white">Create</button></div>
+              </form>
+            )}
+            {createDialog === "account" && (
+              <form onSubmit={async event => { await submitAccount(event); setCreateDialog(null); }} className="space-y-3">
+                <div className="flex items-center justify-between"><h3 className="text-lg font-bold text-gray-900">New {accountType === "guides" ? "mentor / guide" : "Cluster Head"}</h3><button type="button" onClick={() => setCreateDialog(null)} className="text-gray-400">×</button></div>
+                <div className="grid grid-cols-2 gap-2"><input autoFocus required value={account.firstName} onChange={e => setAccount({ ...account, firstName: e.target.value })} placeholder="First name" className="rounded-xl border px-3 py-2.5" /><input required value={account.lastName} onChange={e => setAccount({ ...account, lastName: e.target.value })} placeholder="Last name" className="rounded-xl border px-3 py-2.5" /></div>
+                <input required type="email" value={account.email} onChange={e => setAccount({ ...account, email: e.target.value })} placeholder="Email" className="w-full rounded-xl border px-3 py-2.5" />
+                <input required type="password" minLength={8} value={account.password} onChange={e => setAccount({ ...account, password: e.target.value })} placeholder="Temporary password" className="w-full rounded-xl border px-3 py-2.5" />
+                <div className="flex justify-end gap-2 pt-2"><button type="button" onClick={() => setCreateDialog(null)} className="rounded-xl px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button><button className="rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Create</button></div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+    </motion.div>
   );
 }
 

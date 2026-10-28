@@ -39,7 +39,7 @@ export default function StudentDashboard() {
 
   const uploadFile = async (file: File) => {
     if (!myTeam?.id) { setUploadMsg("You are not assigned to a team yet."); return; }
-    if (!file.name.endsWith(".pdf")) { setUploadMsg("Only PDF files are accepted."); return; }
+    if (!/\.(pdf|doc|docx)$/i.test(file.name)) { setUploadMsg("Only PDF or Word files are accepted."); return; }
     setUploading(true);
     setUploadMsg("");
     const form = new FormData();
@@ -58,6 +58,13 @@ export default function StudentDashboard() {
     UNDER_REVIEW: "bg-blue-100 text-blue-700",
     PASSED: "bg-green-100 text-green-700",
     FAILED: "bg-red-100 text-red-700",
+    DRAFT: "bg-gray-100 text-gray-700",
+    SUBMITTED: "bg-amber-100 text-amber-700",
+    MENTOR_REVIEW: "bg-blue-100 text-blue-700",
+    REVISION: "bg-red-100 text-red-700",
+    VERIFIED: "bg-teal-100 text-teal-700",
+    GRADED: "bg-green-100 text-green-700",
+    CLOSED: "bg-purple-100 text-purple-700",
   };
   const statusIcon: Record<string, JSX.Element> = {
     PENDING: <Clock className="w-4 h-4" />,
@@ -131,7 +138,7 @@ export default function StudentDashboard() {
                   <UploadCloud className={`w-10 h-10 mx-auto mb-3 ${dragging ? "text-indigo-500" : "text-gray-400"}`} />
                   <p className="font-semibold text-gray-700">Drag & Drop your PDF here</p>
                   <p className="text-gray-400 text-sm mt-1">or click to browse</p>
-                  <p className="text-xs text-gray-400 mt-2">Only PDF files accepted</p>
+                  <p className="text-xs text-gray-400 mt-2">PDF or Word files up to 12 MB</p>
                 </>
               )}
             </div>
@@ -168,7 +175,7 @@ export default function StudentDashboard() {
                         <p className="font-semibold text-gray-800 text-sm">{p.fileName}</p>
                         <p className="text-xs text-gray-500">
                           Submitted: {p.submittedAt ? new Date(p.submittedAt).toLocaleDateString() : "-"}
-                          {p.versionNumber ? ` · Version ${p.versionNumber}` : ""}
+                          {p.versionNumber ? ` - Version ${p.versionNumber}` : ""}
                         </p>
                       </div>
                     </div>
@@ -179,8 +186,8 @@ export default function StudentDashboard() {
                           <p className="text-xs text-gray-500">Plagiarism: <span className={(p.plagiarismPercent ?? 0) <= 10 ? "text-green-600 font-bold" : "text-red-600 font-bold"}>{p.plagiarismPercent}%</span></p>
                         </div>
                       )}
-                      <span className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-semibold ${statusColor[p.status] || "bg-gray-100 text-gray-600"}`}>
-                        {statusIcon[p.status]} {p.status}
+                      <span className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-semibold ${statusColor[p.workflowState] || statusColor[p.status] || "bg-gray-100 text-gray-600"}`}>
+                        {statusIcon[p.status]} {p.workflowState || p.status}
                       </span>
                     </div>
                   </motion.div>
@@ -193,4 +200,3 @@ export default function StudentDashboard() {
     </div>
   );
 }
-
