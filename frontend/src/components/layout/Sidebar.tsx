@@ -35,8 +35,7 @@ export function Sidebar() {
     ADMIN: [
       { label: "Overview", href: "/admin", icon: LayoutDashboard, exact: true },
       { label: "Clusters & Accounts", href: "/admin/clusters", icon: Users },
-      { label: "Versions", href: "/admin/versions", icon: CheckCircle },
-      { label: "Final Results", href: "/admin/results", icon: Trophy },
+      { label: "Final Papers", href: "/admin/final-papers", icon: FileText },
     ],
     MENTOR: [
       { label: "Overview", href: "/mentor", icon: LayoutDashboard, exact: true },

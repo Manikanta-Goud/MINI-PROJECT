@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -22,6 +23,66 @@ public class ClusterHeadController {
 
     private final UserRepository userRepo;
     private final TeamRepository teamRepo;
+    private final ClusterRepository clusterRepo;
+
+    @GetMapping("/my-cluster")
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> getMyCluster(@AuthenticationPrincipal UserDetails userDetails) {
+        User clusterHead = userRepo.findByEmail(userDetails.getUsername()).orElseThrow();
+        Optional<Cluster> assignedCluster = clusterRepo.findByClusterHead_Id(clusterHead.getId());
+        if (assignedCluster.isPresent()) {
+            return ResponseEntity.ok(ApiResponse.success(clusterView(assignedCluster.get())));
+        }
+
+        List<Team> assignedTeams = teamRepo.findAll().stream()
+                .filter(team -> team.getClusterHeads().stream()
+                        .anyMatch(head -> head.getId().equals(clusterHead.getId())))
+                .collect(Collectors.toList());
+        Map<Long, Section> assignedSections = assignedTeams.stream()
+                .map(Team::getSection)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(Section::getId, section -> section, (first, ignored) -> first,
+                        LinkedHashMap::new));
+        if (!assignedSections.isEmpty()) {
+            Map<String, Object> derivedDetails = new LinkedHashMap<>();
+            derivedDetails.put("id", null);
+            derivedDetails.put("name", null);
+            derivedDetails.put("clusterHead", userView(clusterHead));
+            derivedDetails.put("guides", assignedSections.values().stream()
+                    .map(Section::getMentor)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .map(this::userView)
+                    .collect(Collectors.toList()));
+            derivedDetails.put("sections", assignedSections.values().stream().map(section -> {
+                Map<String, Object> sectionView = new LinkedHashMap<>();
+                sectionView.put("id", section.getId());
+                sectionView.put("name", section.getName());
+                sectionView.put("teamCount", assignedTeams.stream()
+                        .filter(team -> team.getSection().getId().equals(section.getId()))
+                        .count());
+                return sectionView;
+            }).collect(Collectors.toList()));
+            return ResponseEntity.ok(ApiResponse.success(derivedDetails));
+        }
+        return ResponseEntity.ok(ApiResponse.success(null));
+    }
+
+    private Map<String, Object> clusterView(Cluster cluster) {
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("id", cluster.getId());
+                    result.put("name", cluster.getName());
+                    result.put("clusterHead", userView(cluster.getClusterHead()));
+                    result.put("guides", cluster.getGuides().stream().map(this::userView).collect(Collectors.toList()));
+                    result.put("sections", cluster.getSections().stream().map(section -> {
+                        Map<String, Object> sectionView = new LinkedHashMap<>();
+                        sectionView.put("id", section.getId());
+                        sectionView.put("name", section.getName());
+                        sectionView.put("teamCount", section.getTeams().size());
+                        return sectionView;
+                    }).collect(Collectors.toList()));
+                    return result;
+    }
 
     @GetMapping("/my-teams")
     public ResponseEntity<?> getMyTeams(@AuthenticationPrincipal UserDetails userDetails) {
@@ -61,5 +122,13 @@ public class ClusterHeadController {
         }).collect(Collectors.toList());
 
         return ResponseEntity.ok(ApiResponse.success(result));
+    }
+
+    private Map<String, Object> userView(User user) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", user.getId());
+        result.put("name", user.getFullName());
+        result.put("email", user.getEmail());
+        return result;
     }
 }

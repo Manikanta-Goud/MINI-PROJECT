@@ -1,7 +1,6 @@
-﻿import React from "react";
+import React from "react";
 import { Outlet, Navigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { Sidebar } from "./Sidebar";
 import { TopNav } from "./TopNav";
 import { Loader2 } from "lucide-react";
 
@@ -24,14 +23,11 @@ export function Layout() {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
-      <Sidebar />
-      <div className="flex-1 flex flex-col md:ml-64">
-        <TopNav onMenuClick={() => {}} />
-        <main className="flex-1 overflow-auto">
-          <Outlet />
-        </main>
-      </div>
+    <div className="min-h-screen bg-gray-50">
+      <TopNav />
+      <main className="min-h-[calc(100vh-5rem)] overflow-auto pt-4">
+        <Outlet />
+      </main>
     </div>
   );
 }

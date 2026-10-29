@@ -18,20 +18,31 @@ export default function ClusterHeadDashboard() {
   const [teams, setTeams] = useState<any[]>([]);
   const [sections, setSections] = useState<any[]>([]);
   const [finalResults, setFinalResults] = useState<any[]>([]);
+  const [clusterError, setClusterError] = useState("");
 
   const fetchAll = useCallback(async () => {
-    const [tr, sr, rr] = await Promise.allSettled([
+    const [cr, tr, sr, rr] = await Promise.allSettled([
+      api.get("/cluster-head/my-cluster"),
       api.get("/cluster-head/my-teams"),
       api.get("/sections"),
       api.get("/sections/final-results"),
     ]);
+    const clusterDetails = cr.status === "fulfilled" ? cr.value.data.data || null : null;
+    if (cr.status === "fulfilled") {
+      setClusterError("");
+      if (clusterDetails?.sections) setSections(clusterDetails.sections);
+    } else {
+      setClusterError(cr.reason?.response?.data?.message || "Could not load your cluster details.");
+    }
     let myTeams: any[] = [];
     if (tr.status === "fulfilled") { myTeams = tr.value.data.data || []; setTeams(myTeams); }
 
     if (sr.status === "fulfilled") {
       const allSecs = sr.value.data.data || [];
-      const mySectionIds = [...new Set(myTeams.map((t: any) => t.sectionId))];
-      setSections(allSecs.filter((s: any) => mySectionIds.includes(s.id)));
+      if (!clusterDetails) {
+        const mySectionIds = [...new Set(myTeams.map((t: any) => t.sectionId))];
+        setSections(allSecs.filter((s: any) => mySectionIds.includes(s.id)));
+      }
     }
     if (rr.status === "fulfilled") {
       const all = rr.value.data.data || [];
@@ -62,6 +73,11 @@ export default function ClusterHeadDashboard() {
       </div>
 
       <div className="p-8 space-y-6">
+        {clusterError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {clusterError}
+          </div>
+        )}
         {tab === "overview" && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
             <div className="grid grid-cols-3 gap-4">

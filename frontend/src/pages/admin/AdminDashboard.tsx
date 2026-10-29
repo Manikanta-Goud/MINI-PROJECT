@@ -4,10 +4,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import api from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import {
-  Users, Layers, BookOpen, UserCheck, Shield, ChevronDown, ChevronRight, CheckCircle, XCircle, Trophy, Star, Pencil, Trash2
+  Users, Layers, BookOpen, UserCheck, Shield, ChevronDown, ChevronRight, CheckCircle, XCircle, Trophy, FileText, Pencil, Trash2
 } from "lucide-react";
 
-type Tab = "overview" | "sections" | "clusters" | "mentors" | "versions" | "results";
+type Tab = "overview" | "sections" | "clusters" | "mentors" | "final-papers";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -17,7 +17,6 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState<any>(null);
   const [sections, setSections] = useState<any[]>([]);
   const [mentors, setMentors] = useState<any[]>([]);
-  const [finalResults, setFinalResults] = useState<any[]>([]);
   const [clusters, setClusters] = useState<any[]>([]);
   const [loadError, setLoadError] = useState("");
 
@@ -34,17 +33,17 @@ export default function AdminDashboard() {
       }
       return;
     }
-    const [dash, sec, userRes, res, clusterRes] = await Promise.allSettled([
+    const [dash, sec, userRes, clusterRes] = await Promise.allSettled([
       api.get("/admin/dashboard"),
       api.get("/sections"),
       api.get("/admin/users?role=MENTOR"),
-      api.get("/sections/final-results"),
-      tab === "overview" ? api.get("/admin/clusters") : Promise.resolve({ data: { data: [] } })
+      tab === "overview" || tab === "final-papers"
+        ? api.get("/admin/clusters")
+        : Promise.resolve({ data: { data: [] } })
     ]);
     if (dash.status === "fulfilled") setStats(dash.value.data.data);
     if (sec.status === "fulfilled") setSections(sec.value.data.data || []);
     if (userRes.status === "fulfilled") setMentors(userRes.value.data.data || []);
-    if (res.status === "fulfilled") setFinalResults(res.value.data.data || []);
     if (clusterRes.status === "fulfilled") {
       setClusters(clusterRes.value.data.data || []);
       setLoadError("");
@@ -150,54 +149,7 @@ export default function AdminDashboard() {
           </motion.div>
         )}
 
-        {tab === "versions" && <VersionsPanel sections={sections} onResultsChange={fetchAll} finalResults={finalResults} />}
-
-        {tab === "results" && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-            <h2 className="text-xl font-bold text-gray-800">Final Results Dashboard</h2>
-            {finalResults.length === 0 ? (
-              <div className="bg-white rounded-2xl border border-gray-100 p-16 text-center">
-                <Trophy className="w-14 h-14 text-gray-200 mx-auto mb-4" />
-                <p className="text-gray-500 font-medium">No teams have reached final results yet.</p>
-              </div>
-            ) : (
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      {["Team", "Section", "Version Passed", "AI Content", "Plagiarism"].map(h => (
-                        <th key={h} className="px-5 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wide">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {finalResults.map(r => (
-                      <tr key={r.id} className="hover:bg-gray-50">
-                        <td className="px-5 py-4 font-bold text-gray-900">{r.teamName}</td>
-                        <td className="px-5 py-4 text-gray-600 text-sm">{r.sectionName}</td>
-                        <td className="px-5 py-4">
-                          <span className="text-xs px-2 py-1 bg-indigo-100 text-indigo-700 rounded-full font-bold">
-                            v{r.versionPassed}
-                          </span>
-                        </td>
-                        <td className="px-5 py-4">
-                          <span className={`text-xs px-2 py-1 rounded-full font-bold ${r.aiContentPercent < 15 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                            {r.aiContentPercent ?? 0}%
-                          </span>
-                        </td>
-                        <td className="px-5 py-4">
-                          <span className={`text-xs px-2 py-1 rounded-full font-bold ${r.plagiarismPercent < 10 ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                            {r.plagiarismPercent ?? 0}%
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </motion.div>
-        )}
+        {tab === "final-papers" && <FinalPapersPanel clusters={clusters} />}
       </div>
     </div>
   );
@@ -523,6 +475,54 @@ function SectionCard({ section, expanded = false }: { section: any; expanded?: b
   );
 }
 
+function FinalPapersPanel({ clusters }: { clusters: any[] }) {
+  const sections = clusters.flatMap(cluster =>
+    (cluster.sections || []).map((section: any) => ({ ...section, clusterName: cluster.name }))
+  );
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-gray-800">Final Papers</h2>
+        <p className="text-gray-500 text-sm">Sections grouped by their cluster.</p>
+      </div>
+      {clusters.length === 0 ? (
+        <div className="rounded-2xl border border-gray-100 bg-white p-12 text-center text-sm text-gray-500">No clusters are available.</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-5">
+          {clusters.map(cluster => {
+            const clusterSections = cluster.sections || [];
+            return (
+              <div key={cluster.id} className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100">
+                      <Layers className="h-5 w-5 text-indigo-600" />
+                    </div>
+                    <h3 className="font-bold text-gray-900">{cluster.name}</h3>
+                  </div>
+                  <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">{clusterSections.length} sections</span>
+                </div>
+                <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 lg:grid-cols-3">
+                  {clusterSections.map((section: any) => (
+                    <div key={section.id} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                      <div className="flex items-center gap-3">
+                        <FileText className="h-5 w-5 text-indigo-600" />
+                        <p className="font-semibold text-gray-900">{section.name}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {clusterSections.length === 0 && <p className="text-sm text-gray-400">No sections in this cluster.</p>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 function VersionsPanel({ sections, onResultsChange, finalResults }: { sections: any[]; onResultsChange: () => void; finalResults: any[] }) {
   const [sel, setSel] = useState<any>(null);
   const [teams, setTeams] = useState<any[]>([]);
@@ -540,6 +540,7 @@ function VersionsPanel({ sections, onResultsChange, finalResults }: { sections: 
       setHistory(vers.filter((v: any) => v.status === "COMPLETED"));
       setCurVer(vers.filter((v: any) => v.status === "COMPLETED").length + 1);
     }
+
   }, []);
 
   const toggle = (id: number) => setCheckedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
