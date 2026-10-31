@@ -247,84 +247,230 @@ public class SectionController {
         requireSectionAccess(vs.getSection(), evaluator);
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> evaluations = (List<Map<String, Object>>) body.get("evaluations");
+        if (evaluations == null || evaluations.isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("No evaluations provided", "ERROR"));
+        }
         List<FinalResult> newResults = new ArrayList<>();
         for (Map<String, Object> eval : evaluations) {
-            Long paperId = Long.parseLong(eval.get("paperId").toString());
-            double aiPct = Double.parseDouble(eval.get("aiContentPercent").toString());
-            double plagPct = Double.parseDouble(eval.get("plagiarismPercent").toString());
-            PaperSubmission paper = paperRepo.findById(paperId).orElseThrow();
-            requireTeamAccess(paper.getTeam(), evaluator);
-            paper.setAiContentPercent(aiPct);
-            paper.setPlagiarismPercent(plagPct);
+            // "passed" is the primary field; fall back to legacy aiContentPercent/plagiarismPercent
+            boolean passed;
+            if (eval.containsKey("passed")) {
+                passed = Boolean.TRUE.equals(eval.get("passed"))
+                        || "true".equalsIgnoreCase(String.valueOf(eval.get("passed")));
+            } else {
+                double ai = eval.get("aiContentPercent") != null ? Double.parseDouble(eval.get("aiContentPercent").toString()) : 0.0;
+                double plag = eval.get("plagiarismPercent") != null ? Double.parseDouble(eval.get("plagiarismPercent").toString()) : 100.0;
+                passed = (ai == 0.0 && plag <= 10.0);
+            }
+
+            // Resolve team
+            Team team = null;
+            if (eval.get("teamId") != null) {
+                team = teamRepo.findById(Long.parseLong(eval.get("teamId").toString())).orElse(null);
+            }
+            if (team == null) continue;
+
+            try { requireTeamAccess(team, evaluator); } catch (Exception e) { continue; }
+
+            // Get or create a paper record for this team
+            List<PaperSubmission> papers = paperRepo.findByTeam(team);
+            PaperSubmission paper;
+            if (!papers.isEmpty()) {
+                paper = papers.get(papers.size() - 1);
+            } else {
+                User dummyStudent = !team.getMembers().isEmpty() ? team.getMembers().get(0) : null;
+                paper = PaperSubmission.builder()
+                        .team(team)
+                        .student(dummyStudent)
+                        .fileName(team.getName() + "_Paper.pdf")
+                        .filePath("uploads/" + team.getName() + "_Paper.pdf")
+                        .status(PaperSubmission.SubmissionStatus.PENDING)
+                        .workflowState(PaperSubmission.WorkflowState.SUBMITTED)
+                        .build();
+            }
+
             paper.setEvaluatedAt(java.time.LocalDateTime.now());
             paper.setVersionNumber(vs.getVersionNumber());
-            if (aiPct == 0.0 && plagPct <= 10.0) {
+
+            if (passed) {
                 paper.setStatus(PaperSubmission.SubmissionStatus.PASSED);
                 paper.setWorkflowState(PaperSubmission.WorkflowState.GRADED);
-                if (!finalResultRepo.existsByTeamId(paper.getTeam().getId())) {
-                    FinalResult fr = FinalResult.builder()
-                            .team(paper.getTeam())
+                paperRepo.save(paper);
+                if (!finalResultRepo.existsByTeamId(team.getId())) {
+                    Double aiVal = paper.getAiContentPercent() != null ? paper.getAiContentPercent() : 0.0;
+                    Double plagVal = paper.getPlagiarismPercent() != null ? paper.getPlagiarismPercent() : 0.0;
+                    newResults.add(FinalResult.builder()
+                            .team(team)
                             .paper(paper)
                             .section(vs.getSection())
                             .versionPassed(vs.getVersionNumber())
-                            .aiContentPercent(aiPct)
-                            .plagiarismPercent(plagPct)
-                            .build();
-                    newResults.add(fr);
+                            .aiContentPercent(aiVal)
+                            .plagiarismPercent(plagVal)
+                            .build());
                 }
             } else {
                 paper.setStatus(PaperSubmission.SubmissionStatus.FAILED);
                 paper.setWorkflowState(PaperSubmission.WorkflowState.REVISION);
+                paperRepo.save(paper);
             }
-            paperRepo.save(paper);
         }
         finalResultRepo.saveAll(newResults);
         vs.setStatus(VersionSession.SessionStatus.COMPLETED);
         vs.setCompletedAt(java.time.LocalDateTime.now());
         versionRepo.save(vs);
-        return ResponseEntity.ok(ApiResponse.success("Evaluation complete. Failed papers will appear in next version."));
+        return ResponseEntity.ok(ApiResponse.success("Evaluation complete. " + newResults.size() + " team(s) passed to final results."));
+    }
+
+    @PutMapping("/teams/{teamId}/scores")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('MENTOR') or hasRole('CLUSTER_HEAD')")
+    public ResponseEntity<?> updateTeamScores(
+            @PathVariable Long teamId,
+            @RequestBody Map<String, Object> body,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        Team team = teamRepo.findById(teamId).orElseThrow();
+        requireTeamAccess(team, currentUser(userDetails));
+        Double ai = body.get("aiContentPercent") != null ? Double.parseDouble(body.get("aiContentPercent").toString()) : 0.0;
+        Double plag = body.get("plagiarismPercent") != null ? Double.parseDouble(body.get("plagiarismPercent").toString()) : 0.0;
+        List<PaperSubmission> papers = paperRepo.findByTeam(team);
+        PaperSubmission target;
+        if (papers.isEmpty()) {
+            User dummyStudent = !team.getMembers().isEmpty() ? team.getMembers().get(0) : null;
+            target = PaperSubmission.builder()
+                    .team(team)
+                    .student(dummyStudent)
+                    .fileName(team.getName() + "_Paper.pdf")
+                    .filePath("uploads/" + team.getName() + "_Paper.pdf")
+                    .aiContentPercent(ai)
+                    .plagiarismPercent(plag)
+                    .status(PaperSubmission.SubmissionStatus.PENDING)
+                    .workflowState(PaperSubmission.WorkflowState.SUBMITTED)
+                    .evaluatedAt(java.time.LocalDateTime.now())
+                    .build();
+        } else {
+            target = papers.get(papers.size() - 1);
+            target.setAiContentPercent(ai);
+            target.setPlagiarismPercent(plag);
+            target.setEvaluatedAt(java.time.LocalDateTime.now());
+        }
+        paperRepo.save(target);
+        List<FinalResult> frs = finalResultRepo.findByTeamId(team.getId());
+        for (FinalResult fr : frs) {
+            fr.setAiContentPercent(ai);
+            fr.setPlagiarismPercent(plag);
+            finalResultRepo.save(fr);
+        }
+        return ResponseEntity.ok(ApiResponse.success(paperMap(target)));
     }
 
     // -- Final Results -----------------------------------------------------
 
     @GetMapping("/final-results")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<?> getAllFinalResults(
             @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         User user = currentUser(userDetails);
         List<Map<String, Object>> results = finalResultRepo.findAll().stream()
-                .filter(fr -> canAccessTeam(fr.getTeam(), user)).map(fr -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", fr.getId());
-            m.put("teamName", fr.getTeam().getName());
-            m.put("sectionName", fr.getSection().getName());
-            m.put("paperName", fr.getPaper().getFileName());
-            m.put("versionPassed", fr.getVersionPassed());
-            m.put("aiContentPercent", fr.getAiContentPercent());
-            m.put("plagiarismPercent", fr.getPlagiarismPercent());
-            m.put("passedAt", fr.getPassedAt());
-            return m;
-        }).collect(Collectors.toList());
+                .filter(fr -> canAccessTeam(fr.getTeam(), user))
+                .map(this::toFinalResultMap)
+                .collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(results));
     }
 
     @GetMapping("/final-results/section/{sectionId}")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<?> getFinalResultsBySection(@PathVariable Long sectionId,
             @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         User user = currentUser(userDetails);
         List<Map<String, Object>> results = finalResultRepo.findBySectionId(sectionId).stream()
-                .filter(fr -> canAccessTeam(fr.getTeam(), user)).map(fr -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", fr.getId());
-            m.put("teamName", fr.getTeam().getName());
-            m.put("sectionName", fr.getSection().getName());
-            m.put("paperName", fr.getPaper().getFileName());
-            m.put("versionPassed", fr.getVersionPassed());
-            m.put("aiContentPercent", fr.getAiContentPercent());
-            m.put("plagiarismPercent", fr.getPlagiarismPercent());
-            m.put("passedAt", fr.getPassedAt());
-            return m;
-        }).collect(Collectors.toList());
+                .filter(fr -> canAccessTeam(fr.getTeam(), user))
+                .map(this::toFinalResultMap)
+                .collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(results));
+    }
+
+    private Map<String, Object> toFinalResultMap(FinalResult fr) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", fr.getId());
+
+        // Team info
+        String teamName = "-";
+        Long teamId = null;
+        List<String> members = Collections.emptyList();
+        if (fr.getTeam() != null) {
+            teamName = fr.getTeam().getName();
+            teamId = fr.getTeam().getId();
+            try {
+                if (fr.getTeam().getMembers() != null) {
+                    members = fr.getTeam().getMembers().stream()
+                            .map(User::getFullName)
+                            .collect(Collectors.toList());
+                }
+            } catch (Exception ignored) {}
+        }
+        m.put("teamName", teamName);
+        m.put("teamId", teamId);
+        m.put("teamMembers", members);
+
+        // Section info
+        Section sec = fr.getSection();
+        if (sec == null && fr.getTeam() != null) {
+            try { sec = fr.getTeam().getSection(); } catch (Exception ignored) {}
+        }
+        String sectionName = "-";
+        Long sectionId = null;
+        if (sec != null) {
+            sectionName = sec.getName();
+            sectionId = sec.getId();
+        }
+        m.put("sectionName", sectionName);
+        m.put("sectionId", sectionId);
+
+        // Cluster info
+        String clusterName = "-";
+        try {
+            if (sec != null && sec.getCluster() != null) {
+                clusterName = sec.getCluster().getName();
+            } else if (fr.getTeam() != null && fr.getTeam().getSection() != null && fr.getTeam().getSection().getCluster() != null) {
+                clusterName = fr.getTeam().getSection().getCluster().getName();
+            }
+        } catch (Exception ignored) {}
+        m.put("clusterName", clusterName != null ? clusterName : "-");
+
+        // Mentor info
+        String mentorName = "-";
+        try {
+            if (sec != null && sec.getMentor() != null) {
+                mentorName = sec.getMentor().getFullName();
+            } else if (fr.getTeam() != null && fr.getTeam().getSection() != null && fr.getTeam().getSection().getMentor() != null) {
+                mentorName = fr.getTeam().getSection().getMentor().getFullName();
+            } else if (fr.getTeam() != null && fr.getTeam().getClusterHeads() != null) {
+                mentorName = fr.getTeam().getClusterHeads().stream()
+                        .filter(u -> u.getRole() != null && "MENTOR".equalsIgnoreCase(u.getRole().getName().name()))
+                        .map(User::getFullName)
+                        .findFirst()
+                        .orElse("-");
+            }
+        } catch (Exception ignored) {}
+        m.put("mentorName", mentorName != null ? mentorName : "-");
+
+        // Paper info
+        String paperName = teamName + " Final Paper";
+        Double aiPercent = fr.getAiContentPercent();
+        Double plagPercent = fr.getPlagiarismPercent();
+        try {
+            if (fr.getPaper() != null) {
+                if (fr.getPaper().getFileName() != null) paperName = fr.getPaper().getFileName();
+                if (aiPercent == null) aiPercent = fr.getPaper().getAiContentPercent();
+                if (plagPercent == null) plagPercent = fr.getPaper().getPlagiarismPercent();
+            }
+        } catch (Exception ignored) {}
+        m.put("paperName", paperName);
+        m.put("versionPassed", fr.getVersionPassed() != null ? fr.getVersionPassed() : 1);
+        m.put("aiContentPercent", aiPercent != null ? aiPercent : 0.0);
+        m.put("plagiarismPercent", plagPercent != null ? plagPercent : 0.0);
+        m.put("passedAt", fr.getPassedAt());
+
+        return m;
     }
 
     // -- Paper Upload ------------------------------------------------------
@@ -458,9 +604,17 @@ public class SectionController {
         if (team == null || user == null) return false;
         return hasRole(user, "ADMIN")
                 || (hasRole(user, "STUDENT") && team.getMembers().contains(user))
-                || (hasRole(user, "MENTOR") && team.getSection().getMentor() != null
-                    && team.getSection().getMentor().getId().equals(user.getId()))
-                || (hasRole(user, "CLUSTER_HEAD") && team.getClusterHeads().contains(user));
+                || (hasRole(user, "MENTOR") && (
+                    (team.getSection() != null && team.getSection().getMentor() != null
+                        && team.getSection().getMentor().getId().equals(user.getId()))
+                    || team.getClusterHeads().contains(user)
+                ))
+                || (hasRole(user, "CLUSTER_HEAD") && (
+                    team.getClusterHeads().contains(user)
+                    || (team.getSection() != null && team.getSection().getCluster() != null
+                        && team.getSection().getCluster().getClusterHead() != null
+                        && team.getSection().getCluster().getClusterHead().getId().equals(user.getId()))
+                ));
     }
 
     private void requireTeamAccess(Team team, User user) {
@@ -472,11 +626,18 @@ public class SectionController {
 
     private void requireSectionAccess(Section section, User user) {
         boolean allowed = hasRole(user, "ADMIN")
-                || (hasRole(user, "MENTOR") && section.getMentor() != null
-                    && section.getMentor().getId().equals(user.getId()))
+                || (hasRole(user, "MENTOR") && (
+                    (section.getMentor() != null && section.getMentor().getId().equals(user.getId()))
+                    || teamRepo.findByClusterHead(user).stream()
+                        .anyMatch(team -> team.getSection().getId().equals(section.getId()))
+                ))
+                || (hasRole(user, "CLUSTER_HEAD") && (
+                    (section.getCluster() != null && section.getCluster().getClusterHead() != null
+                        && section.getCluster().getClusterHead().getId().equals(user.getId()))
+                    || teamRepo.findByClusterHead(user).stream()
+                        .anyMatch(team -> team.getSection().getId().equals(section.getId()))
+                ))
                 || teamRepo.findByMember(user).stream()
-                    .anyMatch(team -> team.getSection().getId().equals(section.getId()))
-                || teamRepo.findByClusterHead(user).stream()
                     .anyMatch(team -> team.getSection().getId().equals(section.getId()));
         if (!allowed) {
             throw new org.springframework.web.server.ResponseStatusException(

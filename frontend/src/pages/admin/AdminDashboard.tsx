@@ -1,13 +1,13 @@
-﻿import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import api from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import {
-  Users, Layers, BookOpen, UserCheck, Shield, ChevronDown, ChevronRight, CheckCircle, XCircle, Trophy, FileText, Pencil, Trash2
+  Users, Layers, BookOpen, UserCheck, Shield, ChevronDown, ChevronRight, CheckCircle, XCircle, Trophy, FileText, Pencil, Trash2, Search, Filter
 } from "lucide-react";
 
-type Tab = "overview" | "sections" | "clusters" | "mentors" | "final-papers";
+type Tab = "overview" | "sections" | "clusters" | "mentors" | "final-papers" | "results" | "versions";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -18,6 +18,7 @@ export default function AdminDashboard() {
   const [sections, setSections] = useState<any[]>([]);
   const [mentors, setMentors] = useState<any[]>([]);
   const [clusters, setClusters] = useState<any[]>([]);
+  const [finalResults, setFinalResults] = useState<any[]>([]);
   const [loadError, setLoadError] = useState("");
 
   const fetchClusters = useCallback(async () => {
@@ -33,13 +34,12 @@ export default function AdminDashboard() {
       }
       return;
     }
-    const [dash, sec, userRes, clusterRes] = await Promise.allSettled([
+    const [dash, sec, userRes, clusterRes, finalRes] = await Promise.allSettled([
       api.get("/admin/dashboard"),
       api.get("/sections"),
       api.get("/admin/users?role=MENTOR"),
-      tab === "overview" || tab === "final-papers"
-        ? api.get("/admin/clusters")
-        : Promise.resolve({ data: { data: [] } })
+      api.get("/admin/clusters"),
+      api.get("/sections/final-results")
     ]);
     if (dash.status === "fulfilled") setStats(dash.value.data.data);
     if (sec.status === "fulfilled") setSections(sec.value.data.data || []);
@@ -49,6 +49,9 @@ export default function AdminDashboard() {
       setLoadError("");
     } else {
       setLoadError(clusterRes.reason?.response?.data?.message || "Could not load clusters. Please sign in again.");
+    }
+    if (finalRes.status === "fulfilled") {
+      setFinalResults(finalRes.value.data.data || []);
     }
   }, [fetchClusters, tab]);
 
@@ -76,12 +79,13 @@ export default function AdminDashboard() {
         )}
         {tab === "overview" && stats && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               {[
                 { label: "Total Students", value: stats.totalStudents, icon: Users, color: "bg-blue-500" },
                 { label: "Total Mentors", value: stats.totalMentors, icon: UserCheck, color: "bg-indigo-500" },
                 { label: "Cluster Heads", value: stats.totalClusterHeads, icon: Layers, color: "bg-teal-500" },
                 { label: "Total Sections", value: sections.length, icon: BookOpen, color: "bg-purple-500" },
+                { label: "Papers Passed", value: finalResults.length, icon: Trophy, color: "bg-green-500" },
               ].map(({ label, value, icon: Icon, color }) => (
                 <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-center gap-4">
                   <div className={`p-3 rounded-xl ${color}`}><Icon className="w-6 h-6 text-white" /></div>
@@ -115,6 +119,35 @@ export default function AdminDashboard() {
                 {clusters.length === 0 && <p className="text-sm text-gray-500">No clusters configured yet.</p>}
               </div>
             </div>
+
+            {finalResults.length > 0 && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-bold text-gray-800 flex items-center gap-2">
+                    <Trophy className="w-5 h-5 text-amber-500" />Recent Passed Papers
+                  </h2>
+                  <a href="/admin/results" className="text-sm font-semibold text-indigo-600 hover:text-indigo-800">
+                    View all ({finalResults.length})
+                  </a>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {finalResults.slice(0, 3).map(r => (
+                    <div key={r.id} className="rounded-xl border border-gray-100 p-4 bg-gray-50/50">
+                      <div className="flex items-center justify-between">
+                        <p className="font-bold text-gray-900">{r.teamName}</p>
+                        <span className="text-xs px-2 py-0.5 rounded-full font-bold bg-green-100 text-green-700">v{r.versionPassed} Passed</span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Section: <span className="font-semibold text-gray-700">{r.sectionName}</span> · Cluster: <span className="font-semibold text-gray-700">{r.clusterName}</span>
+                      </p>
+                      {r.mentorName && r.mentorName !== "-" && (
+                        <p className="text-xs text-gray-400 mt-0.5">Mentor: {r.mentorName}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -149,7 +182,21 @@ export default function AdminDashboard() {
           </motion.div>
         )}
 
-        {tab === "final-papers" && <FinalPapersPanel clusters={clusters} />}
+        {(tab === "results" || tab === "final-papers") && (
+          <FinalResultsPanel
+            finalResults={finalResults}
+            clusters={clusters}
+            sections={sections}
+          />
+        )}
+
+        {tab === "versions" && (
+          <VersionsPanel
+            sections={sections}
+            onResultsChange={fetchAll}
+            finalResults={finalResults}
+          />
+        )}
       </div>
     </div>
   );
@@ -475,48 +522,227 @@ function SectionCard({ section, expanded = false }: { section: any; expanded?: b
   );
 }
 
-function FinalPapersPanel({ clusters }: { clusters: any[] }) {
-  const sections = clusters.flatMap(cluster =>
-    (cluster.sections || []).map((section: any) => ({ ...section, clusterName: cluster.name }))
-  );
+function FinalResultsPanel({
+  finalResults,
+  clusters,
+  sections,
+}: {
+  finalResults: any[];
+  clusters: any[];
+  sections: any[];
+}) {
+  const [search, setSearch] = useState("");
+  const [selectedCluster, setSelectedCluster] = useState<string>("ALL");
+  const [selectedSection, setSelectedSection] = useState<string>("ALL");
+
+  // Derive filter options
+  const clusterNames = Array.from(new Set(finalResults.map(r => r.clusterName).filter(Boolean)));
+  const sectionNames = Array.from(new Set(finalResults.map(r => r.sectionName).filter(Boolean)));
+
+  const filtered = finalResults.filter((r: any) => {
+    const matchesSearch =
+      !search ||
+      (r.teamName && r.teamName.toLowerCase().includes(search.toLowerCase())) ||
+      (r.sectionName && r.sectionName.toLowerCase().includes(search.toLowerCase())) ||
+      (r.clusterName && r.clusterName.toLowerCase().includes(search.toLowerCase())) ||
+      (r.mentorName && r.mentorName.toLowerCase().includes(search.toLowerCase())) ||
+      (r.paperName && r.paperName.toLowerCase().includes(search.toLowerCase()));
+
+    const matchesCluster = selectedCluster === "ALL" || r.clusterName === selectedCluster;
+    const matchesSection = selectedSection === "ALL" || r.sectionName === selectedSection;
+
+    return matchesSearch && matchesCluster && matchesSection;
+  });
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-gray-800">Final Papers</h2>
-        <p className="text-gray-500 text-sm">Sections grouped by their cluster.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+            <Trophy className="w-6 h-6 text-amber-500" />
+            Final Results & Passed Papers
+          </h2>
+          <p className="text-gray-500 text-sm mt-0.5">
+            Complete records of all approved teams, sections, clusters, and assigned mentors.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="px-3.5 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-xl text-xs font-bold flex items-center gap-1.5">
+            <CheckCircle className="w-4 h-4 text-green-600" />
+            {finalResults.length} Teams Approved
+          </span>
+        </div>
       </div>
-      {clusters.length === 0 ? (
-        <div className="rounded-2xl border border-gray-100 bg-white p-12 text-center text-sm text-gray-500">No clusters are available.</div>
+
+      {/* Filter and Search Bar */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col md:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by section, team, cluster, mentor, or paper..."
+            className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          <select
+            value={selectedCluster}
+            onChange={e => setSelectedCluster(e.target.value)}
+            className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="ALL">All Clusters</option>
+            {clusterNames.map(cn => (
+              <option key={cn} value={cn}>{cn}</option>
+            ))}
+          </select>
+
+          <select
+            value={selectedSection}
+            onChange={e => setSelectedSection(e.target.value)}
+            className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="ALL">All Sections</option>
+            {sectionNames.map(sn => (
+              <option key={sn} value={sn}>{sn}</option>
+            ))}
+          </select>
+
+          {(search || selectedCluster !== "ALL" || selectedSection !== "ALL") && (
+            <button
+              onClick={() => { setSearch(""); setSelectedCluster("ALL"); setSelectedSection("ALL"); }}
+              className="px-3 py-2 text-xs font-semibold text-gray-500 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Results Table or Empty State */}
+      {finalResults.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-gray-100 p-16 text-center shadow-sm">
+          <Trophy className="w-16 h-16 text-amber-200 mx-auto mb-4" />
+          <p className="text-gray-800 font-bold text-lg">No approved final papers yet</p>
+          <p className="text-gray-500 text-sm mt-1 max-w-md mx-auto">
+            Teams that successfully pass version evaluation in the Mentor or Cluster Head portals will appear here automatically.
+          </p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center shadow-sm">
+          <p className="text-gray-500 font-medium">No results match your filters.</p>
+          <button
+            onClick={() => { setSearch(""); setSelectedCluster("ALL"); setSelectedSection("ALL"); }}
+            className="mt-3 text-xs font-bold text-indigo-600 hover:text-indigo-800 underline"
+          >
+            Clear all filters
+          </button>
+        </div>
       ) : (
-        <div className="grid grid-cols-1 gap-5">
-          {clusters.map(cluster => {
-            const clusterSections = cluster.sections || [];
-            return (
-              <div key={cluster.id} className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-                <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100">
-                      <Layers className="h-5 w-5 text-indigo-600" />
-                    </div>
-                    <h3 className="font-bold text-gray-900">{cluster.name}</h3>
-                  </div>
-                  <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">{clusterSections.length} sections</span>
-                </div>
-                <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 lg:grid-cols-3">
-                  {clusterSections.map((section: any) => (
-                    <div key={section.id} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
-                      <div className="flex items-center gap-3">
-                        <FileText className="h-5 w-5 text-indigo-600" />
-                        <p className="font-semibold text-gray-900">{section.name}</p>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className="px-6 py-3.5 text-xs font-bold text-gray-500 uppercase tracking-wider">Section</th>
+                  <th className="px-6 py-3.5 text-xs font-bold text-gray-500 uppercase tracking-wider">Team Name</th>
+                  <th className="px-6 py-3.5 text-xs font-bold text-gray-500 uppercase tracking-wider">Cluster</th>
+                  <th className="px-6 py-3.5 text-xs font-bold text-gray-500 uppercase tracking-wider">Mentor</th>
+                  <th className="px-6 py-3.5 text-xs font-bold text-gray-500 uppercase tracking-wider">Paper</th>
+                  <th className="px-6 py-3.5 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Version</th>
+                  <th className="px-6 py-3.5 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Plagiarism</th>
+                  <th className="px-6 py-3.5 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">AI Content</th>
+                  <th className="px-6 py-3.5 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filtered.map(r => (
+                  <tr key={r.id} className="hover:bg-gray-50/80 transition-colors">
+                    {/* Section */}
+                    <td className="px-6 py-4">
+                      <span className="font-semibold text-gray-800 text-sm flex items-center gap-1.5">
+                        <BookOpen className="w-4 h-4 text-purple-500 flex-shrink-0" />
+                        {r.sectionName}
+                      </span>
+                    </td>
+
+                    {/* Team Name */}
+                    <td className="px-6 py-4">
+                      <div>
+                        <p className="font-bold text-gray-900 text-sm">{r.teamName}</p>
+                        {r.teamMembers && r.teamMembers.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {r.teamMembers.slice(0, 3).map((m: string, idx: number) => (
+                              <span key={idx} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-100">
+                                {m}
+                              </span>
+                            ))}
+                            {r.teamMembers.length > 3 && (
+                              <span className="text-[10px] text-gray-400">+{r.teamMembers.length - 3}</span>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
-                  {clusterSections.length === 0 && <p className="text-sm text-gray-400">No sections in this cluster.</p>}
-                </div>
-              </div>
-            );
-          })}
+                    </td>
+
+                    {/* Cluster Name */}
+                    <td className="px-6 py-4">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-lg text-xs font-bold">
+                        <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                        {r.clusterName || "—"}
+                      </span>
+                    </td>
+
+                    {/* Mentor Name */}
+                    <td className="px-6 py-4">
+                      <span className="text-sm text-gray-700 font-medium flex items-center gap-1.5">
+                        <UserCheck className="w-4 h-4 text-teal-600 flex-shrink-0" />
+                        {r.mentorName && r.mentorName !== "-" ? r.mentorName : <span className="text-gray-400 italic">Not Assigned</span>}
+                      </span>
+                    </td>
+
+                    {/* Paper Name */}
+                    <td className="px-6 py-4">
+                      <span className="text-sm text-gray-600 font-medium flex items-center gap-1.5 max-w-[200px] truncate" title={r.paperName}>
+                        <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        {r.paperName || "Project Paper"}
+                      </span>
+                    </td>
+
+                    {/* Version Passed */}
+                    <td className="px-6 py-4 text-center">
+                      <span className="bg-blue-100 text-blue-800 text-xs px-2.5 py-1 rounded-full font-bold">
+                        v{r.versionPassed}
+                      </span>
+                    </td>
+
+                    {/* Plagiarism % */}
+                    <td className="px-6 py-4 text-center">
+                      <span className="inline-block text-xs font-bold px-2.5 py-1 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
+                        {r.plagiarismPercent ?? 0}%
+                      </span>
+                    </td>
+
+                    {/* AI Content % */}
+                    <td className="px-6 py-4 text-center">
+                      <span className="inline-block text-xs font-bold px-2.5 py-1 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                        {r.aiContentPercent ?? 0}%
+                      </span>
+                    </td>
+
+                    {/* Status */}
+                    <td className="px-6 py-4 text-center">
+                      <span className="bg-green-100 text-green-700 text-xs px-3 py-1 rounded-full font-bold inline-flex items-center justify-center gap-1">
+                        <CheckCircle className="w-3.5 h-3.5" /> Passed
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </motion.div>
@@ -540,7 +766,6 @@ function VersionsPanel({ sections, onResultsChange, finalResults }: { sections: 
       setHistory(vers.filter((v: any) => v.status === "COMPLETED"));
       setCurVer(vers.filter((v: any) => v.status === "COMPLETED").length + 1);
     }
-
   }, []);
 
   const toggle = (id: number) => setCheckedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -551,24 +776,36 @@ function VersionsPanel({ sections, onResultsChange, finalResults }: { sections: 
   const submit = async () => {
     if (!sel) return; setSubmitting(true);
     try {
-      const papersRes = await api.get(`/sections/${sel.id}/papers`);
-      const allPapers: any[] = papersRes.data.data || [];
-      const evals = remainingTeams.flatMap((t: any) => {
-        const passed = checkedIds.has(t.id);
-        return allPapers.filter((p: any) => p.teamId === t.id).map((p: any) => ({
-          paperId: p.id,
-          aiContentPercent: passed ? 0 : 20 + Math.floor(Math.random() * 30),
-          plagiarismPercent: passed ? 3 + Math.floor(Math.random() * 7) : 15 + Math.floor(Math.random() * 30),
-        }));
-      });
-      if (evals.length === 0) { alert("No papers found for evaluation in this section."); setSubmitting(false); return; }
-      await api.post(`/sections/${sel.id}/versions/create`);
-      const vsRes = await api.get(`/sections/${sel.id}/versions`);
-      const openVS = (vsRes.data.data || []).find((v: any) => v.status === "OPEN");
-      if (!openVS) { alert("Could not create version."); setSubmitting(false); return; }
+      let openVS: any = null;
+      try {
+        const createRes = await api.post(`/sections/${sel.id}/versions/create`);
+        openVS = createRes.data.data;
+      } catch (err: any) {
+        // Version session might already exist as OPEN
+      }
+      if (!openVS) {
+        const vsRes = await api.get(`/sections/${sel.id}/versions`);
+        openVS = (vsRes.data.data || []).find((v: any) => v.status === "OPEN");
+      }
+      if (!openVS) {
+        alert("Could not open a version for evaluation.");
+        setSubmitting(false);
+        return;
+      }
+
+      const evals = remainingTeams.map((t: any) => ({
+        teamId: t.id,
+        passed: checkedIds.has(t.id),
+      }));
+
       await api.post(`/sections/versions/${openVS.id}/evaluate`, { evaluations: evals });
-      onResultsChange(); await loadSec(sel);
-    } catch (e: any) { alert(e.response?.data?.message || "Error"); }
+      onResultsChange();
+      await loadSec(sel);
+      setCheckedIds(new Set());
+      alert(`Version evaluated successfully! Checked teams added to Final Results.`);
+    } catch (e: any) {
+      alert(e.response?.data?.message || "Error completing evaluation");
+    }
     setSubmitting(false);
   };
 

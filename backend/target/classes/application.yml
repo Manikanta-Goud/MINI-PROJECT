@@ -1,23 +1,21 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:testdb
-    username: sa
-    password: 
-    driver-class-name: org.h2.Driver
-
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+    url: jdbc:postgresql://aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require
+    username: postgres.tanwlopfqxettjaypbwi
+    password: "@Supreeth2811"
+    driver-class-name: org.postgresql.Driver
 
   jpa:
     hibernate:
       ddl-auto: update
     show-sql: false
-    database-platform: org.hibernate.dialect.H2Dialect
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     properties:
       hibernate:
         format_sql: true
+        jdbc:
+          lob:
+            non_contextual_creation: true
 
   servlet:
     multipart:
@@ -30,7 +28,7 @@ server:
 
 app:
   jwt:
-    secret: 7c3e8f12a9d4b6e1c5f0a2d8e3b7c4f9a1d5e8b2c6f0a4d7e2b5c8f1a3d6e9b
+    secret: dGhpcyBpcyBhIHZlcnkgc2VjdXJlIGp3dCBzZWNyZXQga2V5IGZvciBwcm9qZWN0IGV2YWx1YXRpb24gc3lzdGVtIDIwMjY=
     expiration: 86400000
 
   file:
@@ -47,3 +45,4 @@ logging:
   level:
     com.projectevaluation: INFO
     org.springframework.security: WARN
+    org.hibernate.SQL: WARN

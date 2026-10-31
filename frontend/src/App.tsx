@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { Layout } from "./components/layout/Layout";
@@ -33,6 +33,8 @@ export default function App() {
             <Route path="mentor/:tab" element={<MentorDashboard />} />
             <Route path="cluster-head" element={<ClusterHeadDashboard />} />
             <Route path="cluster-head/:tab" element={<ClusterHeadDashboard />} />
+            <Route path="cluster_head" element={<ClusterHeadDashboard />} />
+            <Route path="cluster_head/:tab" element={<ClusterHeadDashboard />} />
             <Route path="admin" element={<AdminDashboard />} />
             <Route path="admin/:tab" element={<AdminDashboard />} />
           </Route>

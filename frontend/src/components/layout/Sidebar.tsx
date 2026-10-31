@@ -1,9 +1,9 @@
-﻿import React from "react";
+import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import {
   LayoutDashboard, Layers, Users, CheckCircle,
-  LogOut, BookOpen, Shield, Star, UserCircle, Trophy, FileText, Contact2
+  LogOut, BookOpen, Shield, Star, UserCircle, Trophy, FileText, Contact2, UsersRound
 } from "lucide-react";
 
 export function Sidebar() {
@@ -35,11 +35,11 @@ export function Sidebar() {
     ADMIN: [
       { label: "Overview", href: "/admin", icon: LayoutDashboard, exact: true },
       { label: "Clusters & Accounts", href: "/admin/clusters", icon: Users },
-      { label: "Final Papers", href: "/admin/final-papers", icon: FileText },
+      { label: "Final Results", href: "/admin/results", icon: Trophy },
     ],
     MENTOR: [
       { label: "Overview", href: "/mentor", icon: LayoutDashboard, exact: true },
-      { label: "My Sections", href: "/mentor/sections", icon: Layers },
+      { label: "My Teams", href: "/mentor/teams", icon: Users },
       { label: "Cluster Heads", href: "/mentor/cluster-heads", icon: Contact2 },
       { label: "Versions", href: "/mentor/versions", icon: CheckCircle },
       { label: "Final Results", href: "/mentor/results", icon: Trophy },
@@ -47,6 +47,8 @@ export function Sidebar() {
     CLUSTER_HEAD: [
       { label: "Overview", href: "/cluster-head", icon: LayoutDashboard, exact: true },
       { label: "My Sections", href: "/cluster-head/sections", icon: Layers },
+      { label: "Teams", href: "/cluster-head/teams", icon: Users },
+      { label: "Mentors", href: "/cluster-head/mentors", icon: UsersRound },
       { label: "Versions", href: "/cluster-head/versions", icon: CheckCircle },
       { label: "Final Results", href: "/cluster-head/results", icon: Trophy },
     ],

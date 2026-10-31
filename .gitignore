@@ -5,3 +5,7 @@
 backend/target/
 backend/uploads/
 uploads/
+node_modules/
+**/node_modules/
+.idea/
+**/.idea/

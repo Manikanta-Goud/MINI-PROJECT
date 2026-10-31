@@ -5,13 +5,6 @@ import api from "../../services/api";
 import { motion } from "framer-motion";
 import { BookOpen, Eye, EyeOff, Loader2 } from "lucide-react";
 
-const DEMO = [
-  { role: "Super Admin", email: "admin@college.edu", password: "Admin@1234", color: "bg-purple-50 border-purple-200 text-purple-800" },
-  { role: "Mentor", email: "mentor1@college.edu", password: "Mentor@1234", color: "bg-blue-50 border-blue-200 text-blue-800" },
-  { role: "Cluster Head", email: "ch1@college.edu", password: "Cluster@1234", color: "bg-teal-50 border-teal-200 text-teal-800" },
-  { role: "Student", email: "student1@college.edu", password: "Student@1234", color: "bg-green-50 border-green-200 text-green-800" },
-];
-
 export default function Login() {
   const { login, isAuthenticated, loading: authLoading } = useAuth();
   const navigate = useNavigate();
@@ -47,12 +40,6 @@ export default function Login() {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const fillDemo = (d: typeof DEMO[0]) => {
-    setEmail(d.email);
-    setPassword(d.password);
-    setError("");
   };
 
   return (
@@ -112,20 +99,6 @@ export default function Login() {
               {isLoading ? <><Loader2 className="w-4 h-4 animate-spin" />Signing in...</> : "Sign In"}
             </button>
           </form>
-        </motion.div>
-
-        {/* Demo Credentials */}
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="mt-6">
-          <p className="text-center text-xs text-gray-500 mb-3 font-medium uppercase tracking-wide">Click to fill demo credentials</p>
-          <div className="grid grid-cols-2 gap-2">
-            {DEMO.map(d => (
-              <button key={d.role} onClick={() => fillDemo(d)}
-                className={`p-3 rounded-2xl border text-left transition-all hover:shadow-md hover:-translate-y-0.5 ${d.color}`}>
-                <p className="font-bold text-sm">{d.role}</p>
-                <p className="text-xs opacity-75 truncate">{d.email}</p>
-              </button>
-            ))}
-          </div>
         </motion.div>
       </div>
     </div>
